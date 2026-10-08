@@ -1,4 +1,4 @@
-# R Project 5 — Predicting Big Five Personality from YouTube Vlogs
+# Predicting Big Five Personality from YouTube Vlogs
 
 **Natural language processing | Multivariate regression | Multimodal features | R**
 
@@ -80,11 +80,9 @@ Or use `Rscript analysis/vlogger_big_five.R` in a terminal launched from the pro
 - Preparing and exporting competition predictions.
 
 ## Credits and provenance
-This was a **collaborative 2023 competition project**, not a solo project. The original notebook attributes work as follows: **Laura** (data loading, test data, acknowledgments); **Roman and Laura** (features); **Bram and Laura** (predictive models and text/design/visualizations).
-
 The notebook credits the transcript source to Biel, J.-I., Tsiminaki, V., Dines, J., & Gatica-Perez, D. (2013), *Hi YouTube!: Personality Impressions and Verbal Content in Social Video*, ACM International Conference on Multimodal Interaction. See the original notebook and source README for additional references and dataset details.
 
 **Data publication:** These data were included in the user's Kaggle download. Before making the repository public, check the dataset’s redistribution/license terms; if they prohibit redistribution, omit `data/` from GitHub and instead provide instructions to download it from its original source.
 
 ## Author
-**Laura Maria Fetz**, with original project contributions by **Roman** and **Bram** (see Credits).
+**Laura Maria Fetz**, with original project contributions by **Roman Esseveld** and **Bram le Fèbre**.
