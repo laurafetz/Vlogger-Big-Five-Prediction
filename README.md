@@ -1,10 +1,8 @@
-# Predicting Big Five Impressions from YouTube Vlogs
+# Predicting Big Five impressions from YouTube vlogs
 
-A 2023 group coursework project studying whether transcripts and audiovisual measures predict observers' personality impressions. The five outcomes are extraversion, agreeableness, conscientiousness, emotional stability, and openness; these ratings are not clinical assessments.
+I studied whether transcripts and audiovisual features predict observers' Big Five personality impressions. The coursework data contain 324 labelled vloggers and 80 with withheld scores. I compared predefined feature sets with ridge regression, using five-fold cross-validation repeated five times and a fixed penalty of 10. The text model had a pooled RMSE of 0.827 across the five traits, compared with 0.834 for the training-fold mean baseline.
 
-## Validation results
-
-The current R workflow compares predefined feature sets using **5-fold cross-validation repeated 5 times** on all **324 labelled vloggers**. Each vlogger belongs to one fold within each repeat. Feature scaling and removal of constant predictors use training folds only. Ridge regression has a fixed penalty of 10; it is not tuned on the evaluation folds.
+## Results
 
 | Specification | Pooled CV RMSE |
 | --- | ---: |
@@ -14,42 +12,54 @@ The current R workflow compares predefined feature sets using **5-fold cross-val
 | Audiovisual features + ridge | 0.836 |
 | Combined features with quadratic terms + ridge | 1.507 |
 
-The text model provides a **small** improvement over the mean baseline. The interaction specification performs much worse. These exploratory CV comparisons do not establish a decisive winner or provide an independent test-set score. RMSE pools squared errors across the five trait scales; [per-trait results](results/cv_by_trait.csv) are included.
+I ran this comparison on 8 October 2026. The table comes from [cv_comparison.csv](results/cv_comparison.csv). I report each trait separately in [cv_by_trait.csv](results/cv_by_trait.csv).
 
 ![Repeated cross-validation RMSE](results/cv_comparison.png)
 
-The full workflow ran on 8 October 2026 and generated 400 prediction rows for the 80 unlabelled vloggers. Their scores are withheld, so this repository cannot measure final test RMSE. Aggregate results and the R session are in `results/`; raw data, fold assignments with IDs, and individual predictions are excluded from Git.
+I assign each vlogger to one fold per repeat. I fit scaling and constant-feature removal within training folds. The text features are word count, sentence count, count of words with at least eleven letters, and type-token ratio. I use the supplied `mean.*` audiovisual features.
 
-## Relationship to the original project
+This is a new comparison with simpler features. My original group notebook used NRC emotion counts and stepwise selection. It reported training RMSE of 0.651 for an interaction model and a competition score of 0.845. Those scores come from a different workflow and are not the CV estimates above.
 
-The original notebook explores NRC emotion counts, stepwise selection, and multivariate regression. It reports training RMSE of 0.651 for an interaction-rich model and a submitted competition RMSE of 0.845. Those are historical coursework scores, not the CV estimates above.
+<details>
+<summary>Code and files</summary>
 
-The current validation is a new, simpler comparison: text features are word count, sentence count, long-word count (at least 11 letters), and type-token ratio; audiovisual predictors are the supplied `mean.*` columns. It does not reproduce the notebook's NRC feature extraction or reuse its outcome-guided feature choices. The notebook is retained as source, with cached outputs removed to avoid redistributing transcript excerpts.
-
-## Data and running
-
-The YouTube Personality Dataset is not distributed here because open redistribution terms could not be established. [Data sources and required files](DATA_SOURCES.md) explain how to run with an authorized local copy. The original Idiap source has retired its download.
-
-Requires **R only**, with no additional packages. From the repository root:
+The current analysis requires base R only and a local copy of the dataset obtained with permission.
 
 ```bash
 Rscript analysis/vlogger_big_five.R /path/to/youtube-personality
 ```
 
-Alternatively, place the authorized data in the ignored `data/bda-2023-profiling-personality/youtube-personality/` directory and run without an argument. The script saves aggregate CV tables and a figure, then fits the best CV specification to all training rows and writes local competition-format predictions.
+The input directory must contain `YouTube-Personality-audiovisual_features.csv`, `YouTube-Personality-gender.csv`, `YouTube-Personality-Personality_impression_scores_train.csv`, and the transcript `.txt` files in `transcripts/`. The three CSV files are whitespace-delimited with headers. I do not distribute these files because I could not establish redistribution permission. The [Idiap source page](https://www.idiap.ch/dataset/youtube-personality) has retired its download.
 
-## Files
+The script saves aggregate CV results, a figure, and the R session. It also creates local predictions and fold assignments that are excluded from Git. I removed cached outputs from the original notebook to keep transcript excerpts out of the repository.
 
 ```text
 Vlogger-Big-Five-Prediction/
-├── analysis/vlogger_big_five.R
-├── notebooks/original_kaggle_notebook.ipynb
-├── results/                   # Aggregate validation tables and figure
-├── DATA_SOURCES.md
+├── .gitattributes
 ├── .gitignore
-└── README.md
+├── README.md
+├── analysis/
+│   └── vlogger_big_five.R
+├── notebooks/
+│   └── original_kaggle_notebook.ipynb
+└── results/
+    ├── cv_by_trait.csv
+    ├── cv_comparison.csv
+    ├── cv_comparison.png
+    ├── cv_fold_metrics.csv
+    ├── input_checksums.json
+    ├── run_summary.txt
+    └── session_info.txt
 ```
+
+</details>
+
+## Limitations
+
+The text model's improvement over the mean baseline is small, and I have no independent test score for this comparison. The fixed ridge penalty may not suit each feature set. Observer impressions do not measure clinical personality traits.
 
 ## Credits
 
-Laura Maria Fetz, Roman Esseveld, and Bram le Fèbre. Dataset and publication attribution are recorded in [DATA_SOURCES.md](DATA_SOURCES.md).
+Project authors: **Laura Maria Fetz**, **Roman Esseveld**, and **Bram le Fèbre**. I loaded the data and prepared the test predictions. Roman and I worked on features; Bram and I worked on models, text, and figures.
+
+The dataset and transcripts are credited to Biel and colleagues: [The YouTube Lens](https://doi.org/10.1109/TMM.2012.2225032) and [Hi YouTube!](https://doi.org/10.1145/2522848.2522894).

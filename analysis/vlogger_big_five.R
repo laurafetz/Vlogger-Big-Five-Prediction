@@ -1,3 +1,4 @@
+# Project authors: Laura Maria Fetz, Roman Esseveld, and Bram le Fèbre
 # Repeated vlogger-level cross-validation with predefined feature sets.
 # Rscript analysis/vlogger_big_five.R [path/to/authorized/youtube-personality]
 # Uses base R only. All learned preprocessing is fitted within training folds.
@@ -5,7 +6,7 @@ args <- commandArgs(trailingOnly = TRUE)
 data_dir <- if (length(args)) args[1] else file.path("data", "bda-2023-profiling-personality", "youtube-personality")
 required <- file.path(data_dir, c("YouTube-Personality-audiovisual_features.csv", "YouTube-Personality-gender.csv", "YouTube-Personality-Personality_impression_scores_train.csv"))
 if (!all(file.exists(required)) || !dir.exists(file.path(data_dir, "transcripts"))) {
-  stop("Supply an authorized local dataset directory; see DATA_SOURCES.md. Data are not redistributed.")
+  stop("Supply an authorized local dataset directory; see README.md. Data are not redistributed.")
 }
 dir.create("results", showWarnings = FALSE)
 set.seed(20261008)
@@ -98,8 +99,8 @@ barplot(rev(pooled$cv_rmse),names.arg=rev(pooled$model),horiz=TRUE,las=1,
         col="#347681",border=NA,xlab="Repeated 5-fold CV RMSE (five traits pooled)",
         main="Vlogger personality impressions: validation comparison")
 dev.off()
-capture.output(sessionInfo(),file="results/session_info.txt")
-writeLines(c(paste("Training vloggers:",nrow(train)),paste("Unlabelled vloggers:",nrow(test)),
+capture.output(cat("# Project: Laura Maria Fetz\n"),sessionInfo(),file="results/session_info.txt")
+writeLines(c("# Project: Laura Maria Fetz",paste("Training vloggers:",nrow(train)),paste("Unlabelled vloggers:",nrow(test)),
              paste("Selected specification:",selected),"Seed: 20261008", "Ridge lambda: 10", "5 folds x 5 repeats"),"results/run_summary.txt")
 print(pooled[,c("model","cv_rmse","training_vloggers","folds","repeats")])
 cat("Generated",nrow(submission),"submission rows from",nrow(test),"unlabelled vloggers.\n")
