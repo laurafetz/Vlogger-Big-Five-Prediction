@@ -1,0 +1,6 @@
+Training vloggers: 324
+Unlabelled vloggers: 80
+Selected specification: text_ridge
+Seed: 20261008
+Ridge lambda: 10
+5 folds x 5 repeats

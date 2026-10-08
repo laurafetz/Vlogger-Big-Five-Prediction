@@ -1,352 +1,105 @@
-# Vlogger Big Five Prediction - R analysis
-# Adapted from the original Kaggle notebook, with portable file paths.
-# This is a faithful research-portfolio adaptation, not an independently validated reproduction.
-# Set working directory to this repository root before running:
-# Rscript analysis/vlogger_big_five.R
-
+# Repeated vlogger-level cross-validation with predefined feature sets.
+# Rscript analysis/vlogger_big_five.R [path/to/authorized/youtube-personality]
+# Uses base R only. All learned preprocessing is fitted within training folds.
+args <- commandArgs(trailingOnly = TRUE)
+data_dir <- if (length(args)) args[1] else file.path("data", "bda-2023-profiling-personality", "youtube-personality")
+required <- file.path(data_dir, c("YouTube-Personality-audiovisual_features.csv", "YouTube-Personality-gender.csv", "YouTube-Personality-Personality_impression_scores_train.csv"))
+if (!all(file.exists(required)) || !dir.exists(file.path(data_dir, "transcripts"))) {
+  stop("Supply an authorized local dataset directory; see DATA_SOURCES.md. Data are not redistributed.")
+}
 dir.create("results", showWarnings = FALSE)
+set.seed(20261008)
+audio <- read.table(required[1], header = TRUE)
+gender <- read.table(required[2], header = TRUE)
+scores <- read.table(required[3], header = TRUE)
+stopifnot(!anyDuplicated(audio$vlogId), !anyDuplicated(gender$vlogId), !anyDuplicated(scores$vlogId))
+files <- sort(list.files(file.path(data_dir, "transcripts"), pattern = "\\.txt$", full.names = TRUE))
+text_features <- t(vapply(files, function(file) {
+  text <- paste(readLines(file, warn = FALSE, encoding = "UTF-8"), collapse = " ")
+  words <- regmatches(tolower(text), gregexpr("[[:alpha:]]+", tolower(text)))[[1]]
+  sentences <- sum(nzchar(trimws(unlist(strsplit(text, "[.!?]+")))))
+  c(word_count = length(words), sentence_count = sentences,
+    long_word_count = sum(nchar(words) >= 11),
+    type_token_ratio = if (length(words)) length(unique(words))/length(words) else 0)
+}, numeric(4)))
+text_features <- data.frame(vlogId = sub("\\.txt$", "", basename(files)), text_features)
+stopifnot(!anyDuplicated(text_features$vlogId))
+data <- Reduce(function(x,y) merge(x,y,by="vlogId",all=TRUE), list(audio,gender,scores,text_features))
+data <- data[order(data$vlogId),]
+traits <- c("Extr", "Agr", "Cons", "Emot", "Open")
+text_cols <- c("word_count", "sentence_count", "long_word_count", "type_token_ratio")
+audio_cols <- grep("^mean\\.",names(audio),value=TRUE)
+feature_sets <- list(mean_baseline=character(), text_ridge=text_cols,
+                     audiovisual_ridge=audio_cols, combined_ridge=c(text_cols,audio_cols),
+                     interaction_ridge=c(text_cols,audio_cols))
+has_scores <- rowSums(!is.na(data[,traits])) == length(traits)
+partial <- rowSums(!is.na(data[,traits])) %in% 1:4
+if (any(partial)) stop("Partially labelled rows need explicit missing-data handling")
+train <- data[has_scores,]; test <- data[!has_scores,]
+if (nrow(train)<10 || !all(scores$vlogId %in% train$vlogId)) stop("Training labels lost during joins")
+if (anyNA(data[,c(text_cols,audio_cols)])) stop("Missing features: inspect input joins")
+y <- as.matrix(train[,traits])
+k <- 5; repeats <- 5; lambda <- 10
 
-# --- Notebook cell 2 ---
-# Dependencies: see README.md
-library(tidyverse)
-library(tidytext)
-library(textdata)
-library(wordcloud)
-library(caret)
-
-# Run from project root. Explicit filenames avoid reliance on directory listing order.
-master_dir <- file.path("data", "bda-2023-profiling-personality", "youtube-personality")
-path_to_transcripts <- file.path(master_dir, "transcripts")
-AudioVisual_file <- file.path(master_dir, "YouTube-Personality-audiovisual_features.csv")
-Gender_file <- file.path(master_dir, "YouTube-Personality-gender.csv")
-Personality_file <- file.path(master_dir, "YouTube-Personality-Personality_impression_scores_train.csv")
-stopifnot(all(file.exists(c(AudioVisual_file, Gender_file, Personality_file))), dir.exists(path_to_transcripts))
-
-
-# --- Notebook cell 4 ---
-# Importing the transcripts
-transcript_files = list.files(path_to_transcripts, full.names = TRUE) 
-print(head(transcript_files))
-
-# Encoding the ID
-vlogId = basename(transcript_files)
-vlogId = str_replace(vlogId, pattern = ".txt$", replacement = "")
-head(vlogId)
-
-# Including features extracted from the transcript texts
-transcripts_df = tibble(
-    
-    # vlogId connects each transcripts to a vlogger
-    vlogId=vlogId,
-    
-    # Read the transcript text from all file and store as a string
-    TEXT = map_chr(transcript_files, ~ paste(readLines(.x), collapse = "\\n")), 
-    
-    # `filename` keeps track of the specific video transcript
-    filename = transcript_files
-)
-
-# Inspecting the first two examples
-transcripts_df %>% 
-    head(2)
-
-# --- Notebook cell 6 ---
-# Import the Personality scores
-pers_df = read_delim(Personality_file, delim=" ")
-
-# Checking the data frame
-head(pers_df)
-
-# --- Notebook cell 8 ---
-# Storing gender info
-gender_df = read.delim(Gender_file, head=FALSE, sep=" ", skip = 2)
-
-# Add column names
-names(gender_df) = c('vlogId', 'gender')
-
-# preview data
-head(gender_df)
-
-# --- Notebook cell 10 ---
-# merging gender and pers with left_join
-vlogger_df01 = left_join(gender_df, pers_df, by='vlogId')
-
-# switching characters for numeric values for gender variable
-vlogger_df01$gender[vlogger_df01$gender == "Female"] <- 1
-vlogger_df01$gender[vlogger_df01$gender == "Male"] <- 0
-
-# preview data
-head(vlogger_df01)
-
-# --- Notebook cell 13 ---
-# Importing the audio and visual information
-AudioVisual_df <- read.delim(AudioVisual_file, sep = " ", head=TRUE)
-
-# preview data
-head(AudioVisual_df)
-
-# --- Notebook cell 16 ---
-# select all columns containing the mean 
-selected_columns <- grep("^mean", names(AudioVisual_df), value = TRUE)
-
-# Join the selected columns to vlogger_df01
-vlogger_df1 <- left_join(vlogger_df01, select(AudioVisual_df, vlogId, all_of(selected_columns)), by = 'vlogId')
-
-# Print the first few rows of the resulting data frame
-head(vlogger_df1)
-
-# --- Notebook cell 19 ---
-# Tokenizing the transcripts into words
-transcript_features_df = 
-    transcripts_df %>%
-    unnest_tokens(token, TEXT, token = 'words') 
-
-# Creating a wordcloud to see the 100 most used words
-transcript_features_df %>%
-    mutate(token = tolower(token)) %>%
-count(token, sort= TRUE) %>%
-with(., wordcloud::wordcloud(token, n, max.words = 100))
-
-# --- Notebook cell 21 ---
-# Merging transcript_features_df with vlogger_df1
-vlogger_df = left_join(vlogger_df1, transcript_features_df, by='vlogId') %>%
-   select(-filename)
-
-# preview of data
-head(vlogger_df)
-
-# --- Notebook cell 23 ---
-# NRC lexicon from tidytext/textdata. On first run textdata may prompt for NRC terms.
-nrc <- tidytext::get_sentiments("nrc")
-transcript_sentiment <- left_join(vlogger_df, nrc, by = c(token = "word"), relationship = "many-to-many") %>%
-  count(vlogId, sentiment) %>%
-  pivot_wider(id_cols = "vlogId", names_from = sentiment, values_from = n, values_fill = 0)
-
-
-# --- Notebook cell 25 ---
-# getting stopwords
-stopwords <- get_stopwords() 
-
-# removing stopwords
-transcript_features_df <- transcript_features_df %>%
-    anti_join(stopwords, by = c(token = "word"))
-
-#creating a wordcloud to see the 100 most used words without stopwords
-transcript_features_df %>%
-count(token, sort= TRUE) %>%
-with(., wordcloud::wordcloud(token, n, max.words = 100))
-
-# --- Notebook cell 27 ---
-# merging our dataframe 
-data01 <- inner_join(vlogger_df1,transcript_sentiment, by = "vlogId")
-
-# preview data
-head(data01)
-
-# --- Notebook cell 29 ---
-# make a column that counts the length of a sentence by summing the words per vlog.
-transcript_features_df_2 <- 
-    transcripts_df %>%
-    unnest_tokens(sentences, TEXT, token = 'sentences') %>%
-  group_by(vlogId) %>%
-  summarize(sentences = n()) %>%
-  as_tibble()
-
-# Merge the two data frames
-data02 <- inner_join(data01, transcript_features_df_2, by = "vlogId")
-
-# preview data
-head(data02)
-
-# --- Notebook cell 31 ---
-# make a dataframe that counts the letters in each word:
-word_length <- transcript_features_df %>%
-    select(vlogId, token) %>%
-    mutate(token = nchar(token))
-
-# objectivly calculate what short and long words should be by calculating std
-summary(word_length$token)
-
-# creating a variable that contains the length of the words
-word_length <- word_length %>%
-    mutate(long_word = token >= 11)
-
-# creating a variable that contains long words
-long_word_df <- word_length %>%
-  group_by(vlogId) %>%
-  summarize(long_words = sum(long_word))
-
-# now adding the feature to the data 
-data <- data02 %>%
-  left_join(long_word_df, by = "vlogId")
-
-# preview data
-head(data)
-
-# --- Notebook cell 34 ---
-# building an additive model
-mod_01 <- lm(cbind(Extr, Agr, Cons, Emot, Open) ~ gender + mean.pitch + mean.conf.pitch + mean.spec.entropy + mean.val.apeak + mean.loc.apeak + mean.num.apeak + mean.num.apeak + mean.energy + mean.d.energy + anger + anticipation + disgust + fear + joy + negative + positive + sadness + surprise + trust + sentences + long_words, data = data)
-
-# print model summary
-summary(mod_01)
-
-# RMSE for the training dataset
-(RMSE_01 <- sqrt(mean(mod_01$residuals^2)))
-
-# --- Notebook cell 36 ---
-# building a second additive model
-mod_02 <- lm(cbind(Extr, Agr, Cons, Emot, Open) ~ gender + mean.conf.pitch + mean.spec.entropy + mean.val.apeak + mean.loc.apeak + mean.num.apeak + mean.num.apeak + mean.energy + mean.d.energy + anger + anticipation + fear + joy + positive + surprise + sentences + long_words, data = data)
-
-# print model summary
-summary(mod_02)
-
-# RMSE for the training dataset
-(RMSE_02 <- sqrt(mean(mod_02$residuals^2)))
-
-# --- Notebook cell 38 ---
-# building an interactive model
-mod_03 <- lm(cbind(Extr, Agr, Cons, Emot, Open) ~ gender + mean.pitch * mean.conf.pitch + mean.spec.entropy + mean.val.apeak * mean.loc.apeak * mean.num.apeak * mean.num.apeak + mean.energy * mean.d.energy + anger * disgust * fear * negative * sadness + anticipation * joy * positive * surprise * trust + sentences * long_words, data = data)
-
-# print model summary
-summary(mod_03)
-
-# RMSE for the training dataset
-(RMSE_03 <- sqrt(mean(mod_03$residuals^2)))
-
-# --- Notebook cell 40 ---
-# Remove highly correlated predictor columns before fitting the revised model.
-corr_data <- data[, 8:28]
-correlation_matrix <- cor(corr_data, use = "pairwise.complete.obs")
-highly_correlated_vars <- caret::findCorrelation(correlation_matrix, cutoff = 0.8)
-if (length(highly_correlated_vars)) corr_data <- corr_data[, -highly_correlated_vars, drop = FALSE]
-data_cor <- cbind(data[, 1:7, drop = FALSE], corr_data)
-print(names(data_cor))
-
-
-# --- Notebook cell 41 ---
-# building an additive model with remaining features
-mod_04 <- lm(cbind(Extr, Agr, Cons, Emot, Open) ~ gender + mean.pitch + mean.conf.pitch + mean.spec.entropy + mean.val.apeak + mean.loc.apeak + mean.energy + mean.d.energy + disgust + fear + joy + surprise + sentences + long_words, data = data)
-
-# print model summary
-summary(mod_04)
-
-# RMSE for the training dataset
-(RMSE_04 <- sqrt(mean(mod_04$residuals^2)))
-
-# --- Notebook cell 43 ---
-# List of response variables
-response_vars <- c("Extr", "Agr", "Cons", "Emot", "Open")
-
-# Create an empty list to store the stepwise models
-stepwise_models <- list()
-
-# Iterate over each response variable and fit a stepwise model
-for (response_var in response_vars) {
-  # Create the formula for the current response variable
-  formula_str <- paste(response_var, "~ gender + mean.pitch + mean.conf.pitch + mean.spec.entropy + 
-  mean.val.apeak + mean.loc.apeak + mean.num.apeak + mean.num.apeak + mean.energy + mean.d.energy + 
-  anger + anticipation + disgust + fear + joy + negative + positive + sadness + surprise + trust + 
-  sentences + long_words")
-  lm_formula <- as.formula(formula_str)
-  
-  # Fit the linear model
-  lm_model <- lm(lm_formula, data = data)
-  
-  # Perform stepwise regression
-  stepwise_model <- step(lm_model, direction = "both")
-  
-  # Store the stepwise model in the list
-  stepwise_models[[response_var]] <- stepwise_model
+fit_predict <- function(training, testing, cols, interaction=FALSE) {
+  target <- as.matrix(training[,traits])
+  if (!length(cols)) return(matrix(colMeans(target),nrow(testing),length(traits),byrow=TRUE))
+  x <- as.matrix(training[,cols]); new_x <- as.matrix(testing[,cols])
+  centers <- colMeans(x); scales <- apply(x,2,sd)
+  keep <- is.finite(scales) & scales > 1e-10
+  x <- sweep(sweep(x[,keep,drop=FALSE],2,centers[keep]),2,scales[keep],"/")
+  new_x <- sweep(sweep(new_x[,keep,drop=FALSE],2,centers[keep]),2,scales[keep],"/")
+  if (interaction && ncol(x)>0) {
+    pairs <- which(upper.tri(matrix(0,ncol(x),ncol(x)),diag=TRUE),arr.ind=TRUE)
+    expand <- function(z) do.call(cbind,lapply(seq_len(nrow(pairs)),function(i) z[,pairs[i,1]]*z[,pairs[i,2]]))
+    x <- cbind(x,expand(x)); new_x <- cbind(new_x,expand(new_x))
+  }
+  x <- cbind(intercept=1,x); new_x <- cbind(intercept=1,new_x)
+  penalty <- diag(c(0,rep(lambda,ncol(x)-1)))
+  coefficients <- solve(crossprod(x)+penalty,crossprod(x,target))
+  new_x %*% coefficients
 }
 
-# Access and view the summaries of the stepwise models
-for (response_var in response_vars) {
-  cat("Summary for response variable:", response_var, "\n")
-  print(summary(stepwise_models[[response_var]]))
-  cat("\n")
+records <- list(); folds <- list(); counter <- 1
+for (repeat_id in seq_len(repeats)) {
+  fold <- sample(rep(seq_len(k),length.out=nrow(train)))
+  folds[[repeat_id]] <- data.frame(vlogId=train$vlogId,repeat_id=repeat_id,fold=fold)
+  for (fold_id in seq_len(k)) {
+    fit_rows <- fold!=fold_id; holdout <- fold==fold_id
+    for (model in names(feature_sets)) {
+      prediction <- fit_predict(train[fit_rows,],train[holdout,],feature_sets[[model]],model=="interaction_ridge")
+      errors <- prediction-y[holdout,,drop=FALSE]
+      records[[counter]] <- data.frame(model=model,repeat_id=repeat_id,fold=fold_id,
+                                      trait=traits,n_vloggers=sum(holdout),
+                                      squared_error=colSums(errors^2))
+      counter <- counter+1
+    }
+  }
 }
-
-# best model based on smallest AIC
-mod_05 <- lm(cbind(Extr, Agr, Cons, Emot, Open) ~ mean.loc.apeak + mean.num.apeak + anticipation + joy + 
-    positive + sadness + trust, data = data)
-
-# RMSE for the training dataset
-(RMSE_05 <- sqrt(mean(mod_05$residuals^2)))
-
-# --- Notebook cell 45 ---
-# building a model only including audio and visual features
-mod_6 <- lm(cbind(Extr, Agr, Cons, Emot, Open) ~ mean.pitch + mean.conf.pitch + mean.spec.entropy + mean.val.apeak + mean.loc.apeak + mean.num.apeak + mean.num.apeak + mean.energy + mean.d.energy, data = data)
-
-# print model summary
-summary(mod_6)
-
-# RMSE for the training dataset
-(RMSE_06 <- sqrt(mean(mod_6$residuals^2)))
-
-# --- Notebook cell 47 ---
-# building a model only including text features
-mod_07 <- lm(cbind(Extr, Agr, Cons, Emot, Open) ~ anger + anticipation + disgust + fear + joy + negative + positive + sadness + surprise + trust + sentences + long_words, data = data)
-
-# print model summary
-summary(mod_07)
-
-# RMSE for the training dataset
-(RMSE_07 <- sqrt(mean(mod_07$residuals^2)))
-
-# --- Notebook cell 49 ---
-# combine RMSEs into one vector:
-all_rmse <- c(RMSE_01, RMSE_02, RMSE_03, RMSE_04, RMSE_05, RMSE_06, RMSE_07)
-
-# Names of the RMSE values 
-names <- c("MOD_01", "MOD_02", "MOD_03", "MOD_04", "MOD_05", "MOD_06", "MOD_07")
-
-# Create a barplot with names on the X-axis and values on the Y-axis
-barplot(all_rmse, names.arg = names, main = "RMSE Values", xlab = "RMSE Names", ylab = "RMSE Values", col = "grey")
-
-
-
-# --- Notebook cell 51 ---
-# Creating a subset for test data
-test_data = data %>% 
-    filter(is.na(Extr))
-
-# counting rows
-nrow(test_data)
-
-# --- Notebook cell 53 ---
-# Prediction for test data
-pred_mod_all = predict(mod_07, new = test_data)
-
-# Compute output data frame
-test_data_pred = test_data %>% 
-    mutate(
-        Extr = pred_mod_all[,'Extr'], 
-        Agr  = pred_mod_all[,'Agr' ],
-        Cons = pred_mod_all[,'Cons'],
-        Emot = pred_mod_all[,'Emot'],
-        Open = pred_mod_all[,'Open']
-    ) %>%
-    select(vlogId, Extr:Open)
-
-# preview of data
-head(test_data_pred)
-
-# --- Notebook cell 55 ---
-# Converting our data to long format
-test_data_pred_long <- test_data_pred %>% 
-    pivot_longer(c(Extr, Agr, Cons, Emot, Open), names_to='pers_axis')
-
-# Obtain the right format for Kaggle
-test_data_pred_final <- test_data_pred_long %>%
-    unite(Id, vlogId, pers_axis) %>%
-    rename(Expected = value)
-
-# Check if we succeeded
-head(test_data_pred_final)
-
-# --- Notebook cell 56 ---
-# Write to csv
-write_csv(test_data_pred_final, file = file.path("results", "predictions_07.csv"))
-
-# Check if the file was written successfully.
-dir()
+details <- do.call(rbind,records)
+by_trait <- aggregate(cbind(squared_error,n_vloggers)~model+trait,details,sum)
+by_trait$rmse <- sqrt(by_trait$squared_error/by_trait$n_vloggers)
+pooled <- aggregate(cbind(squared_error,n_vloggers)~model,details,sum)
+pooled$cv_rmse <- sqrt(pooled$squared_error/pooled$n_vloggers)
+pooled <- pooled[order(pooled$cv_rmse),]
+pooled$training_vloggers <- nrow(train); pooled$folds <- k; pooled$repeats <- repeats
+write.csv(pooled,"results/cv_comparison.csv",row.names=FALSE)
+write.csv(by_trait,"results/cv_by_trait.csv",row.names=FALSE)
+write.csv(details,"results/cv_fold_metrics.csv",row.names=FALSE)
+write.csv(do.call(rbind,folds),"results/local_cv_assignments.csv",row.names=FALSE)
+selected <- pooled$model[1]
+predictions <- fit_predict(train,test,feature_sets[[selected]],selected=="interaction_ridge")
+submission <- data.frame(Id=as.vector(t(outer(test$vlogId,traits,paste,sep="_"))),Expected=as.vector(t(predictions)))
+stopifnot(nrow(submission)==nrow(test)*length(traits), all(is.finite(submission$Expected)))
+write.csv(submission,"results/local_predictions.csv",row.names=FALSE)
+png("results/cv_comparison.png",width=1400,height=800,res=150)
+par(mar=c(5,11,4,2))
+barplot(rev(pooled$cv_rmse),names.arg=rev(pooled$model),horiz=TRUE,las=1,
+        col="#347681",border=NA,xlab="Repeated 5-fold CV RMSE (five traits pooled)",
+        main="Vlogger personality impressions: validation comparison")
+dev.off()
+capture.output(sessionInfo(),file="results/session_info.txt")
+writeLines(c(paste("Training vloggers:",nrow(train)),paste("Unlabelled vloggers:",nrow(test)),
+             paste("Selected specification:",selected),"Seed: 20261008", "Ridge lambda: 10", "5 folds x 5 repeats"),"results/run_summary.txt")
+print(pooled[,c("model","cv_rmse","training_vloggers","folds","repeats")])
+cat("Generated",nrow(submission),"submission rows from",nrow(test),"unlabelled vloggers.\n")
